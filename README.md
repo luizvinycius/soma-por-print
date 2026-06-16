@@ -91,7 +91,7 @@ A coluna esquerda da tabela (nome da forma de pagamento) é normalizada em categ
 |-------------------------------------------|-------------|
 | TEF Crédito, Cartão Crédito, Crédito      | `credito`   |
 | TEF Débito, Cartão Débito, Débito         | `debito`    |
-| PIX (Voucher), TEF PIX (Pix)              | `pix`       |
+| PIX (Voucher)                             | `pix`       |
 | **PIX TEF (Pix)**                         | *ignorado*  |
 | **Totais (R$)** / qualquer linha com "total" | *ignorado* |
 | Formas não mapeadas (ex: Caderneta, Delivery) | *ignorado* |
