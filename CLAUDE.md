@@ -126,10 +126,10 @@ https://github.com/UB-Mannheim/tesseract/wiki
 O OCR usa `pytesseract.image_to_data` para obter a posição (bounding box) de cada palavra, e associa categoria ↔ valor pela geometria — **não** por divisão manual da imagem:
 
 1. Roda `image_to_data` com `--psm 6` (idioma `por`, com fallback sem idioma)
-2. Descarta palavras com confiança abaixo de `_CONF_MIN` (20)
+2. Descarta palavras com confiança abaixo de `_CONF_MIN` (20), **exceto** tokens com formato monetário ou que pareçam uma célula de valor lida com erro (`_eh_celula_valor`: ≥ 2 dígitos) — valores garbled como `218oo`/`62(00` saem com conf baixíssima e, se descartados aqui, levam a linha inteira junto (some categoria + valor)
 3. Agrupa palavras pelas **linhas detectadas pelo próprio Tesseract** (`block_num + par_num + line_num`) — evita misturar texto de linhas diferentes
-4. Determina o **X de corte** (`split_x`) pela mediana do X dos tokens com formato monetário
-5. Para cada linha: texto à esquerda do corte → categoria; primeiro número à direita → valor
+4. Determina o **X de corte** (`split_x`) cortando no meio do vão entre a borda direita da categoria e a borda esquerda da coluna de valores. A âncora são os tokens com formato monetário; se nenhum saiu limpo, cai para as células com cara de valor na metade direita (evita o "tudo zerado")
+5. Para cada linha de valor: junta a categoria das linhas próximas (banda vertical) → categoria; primeiro número → valor (re-lido da célula ampliada quando garbled / conf baixa)
 
 ### Parsing de valores (`parsear_valor` / `_RE_VALOR`)
 

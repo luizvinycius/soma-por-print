@@ -19,6 +19,17 @@ _ESCALA_VALOR = 4   # fator de ampliação ao re-ler uma célula de valor
 _RE_VALOR = re.compile(r"\d{1,3}(?:\.\d{3})+,\d{2}|\d+,\d{2}")
 
 
+def _eh_celula_valor(texto):
+    """
+    True se o token PARECE uma célula de valor (>= 2 dígitos), mesmo lido com
+    erro. Valores como "318,00" às vezes saem garbled e com confiança baixíssima
+    ("218oo" conf 9, "62(00" conf 0) — não casam _RE_VALOR e seriam descartados
+    pelo filtro de confiança, sumindo a linha inteira. Mantê-los permite re-ler a
+    célula ampliada e recuperar o valor.
+    """
+    return sum(c.isdigit() for c in texto) >= 2
+
+
 def parsear_valor(texto):
     """Extrai valor numérico brasileiro (ex: 1.234,56 ou 5000,00) de uma string."""
     match = _RE_VALOR.search(texto)
@@ -112,9 +123,11 @@ def processar_imagem(imagem):
         if not texto or conf < 0:
             continue
         # Filtra ruído de baixa confiança, MAS nunca descarta um token com
-        # formato de valor monetário — valores reais às vezes saem com conf
-        # baixa (ex: "450,00" com conf 18) e não podem ser perdidos.
-        if conf < _CONF_MIN and not _RE_VALOR.fullmatch(texto):
+        # formato de valor monetário (ex: "450,00" com conf 18) nem um token
+        # que pareça uma célula de valor lida com erro (>= 2 dígitos, ex:
+        # "218oo"/"62(00") — esses são re-lidos da célula ampliada e, se
+        # descartados aqui, levam a linha inteira junto.
+        if conf < _CONF_MIN and not _RE_VALOR.fullmatch(texto) and not _eh_celula_valor(texto):
             continue
         cy = dados["top"][i] + dados["height"][i] // 2
         palavras.append({
@@ -135,6 +148,13 @@ def processar_imagem(imagem):
     # da categoria. Em vez disso, corta no MEIO do espaço em branco entre a borda
     # direita da categoria e a borda esquerda da coluna de valores.
     monetarios = [w for w in palavras if _RE_VALOR.fullmatch(w["texto"])]
+    if not monetarios:
+        # Nenhum valor saiu limpo (todos garbled). Usa as células com cara de
+        # valor na metade direita como âncora de coluna, para não perder a
+        # captura inteira (antes retornava [] → popup com "tudo zerado").
+        meio = imagem.width / 2
+        monetarios = [w for w in palavras
+                      if _eh_celula_valor(w["texto"]) and w["x"] >= meio]
     if not monetarios:
         return []
     val_left = min(w["x"] for w in monetarios)
