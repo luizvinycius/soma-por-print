@@ -129,11 +129,17 @@ def processar_imagem(imagem):
     if not palavras:
         return []
 
-    # X de corte: mediana dos X dos tokens com formato monetário
-    x_monetarios = sorted(w["x"] for w in palavras if _RE_VALOR.fullmatch(w["texto"]))
-    if not x_monetarios:
+    # X de corte entre as colunas. Os valores são alinhados à direita, então o
+    # X ESQUERDO deles varia com a largura (ex: "1.076,50" começa mais à esquerda
+    # que "22,00") — usar a mediana desse X derrubava valores largos para o lado
+    # da categoria. Em vez disso, corta no MEIO do espaço em branco entre a borda
+    # direita da categoria e a borda esquerda da coluna de valores.
+    monetarios = [w for w in palavras if _RE_VALOR.fullmatch(w["texto"])]
+    if not monetarios:
         return []
-    split_x = x_monetarios[len(x_monetarios) // 2] - 10
+    val_left = min(w["x"] for w in monetarios)
+    cat_rights = [w["x"] + w["bbox"][2] for w in palavras if w["x"] + w["bbox"][2] <= val_left]
+    split_x = (max(cat_rights) + val_left) / 2 if cat_rights else val_left - 10
 
     # Separa as duas colunas pelo X de corte
     esq_tokens = [w for w in palavras if w["x"] <  split_x]
