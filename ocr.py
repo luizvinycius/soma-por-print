@@ -1,5 +1,4 @@
 import re
-from collections import defaultdict
 import pytesseract
 from PIL import Image, ImageOps
 
@@ -7,7 +6,14 @@ from categorias import normalizar_categoria, deve_ignorar
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-_CONFIG = "--psm 6"
+# Modos de segmentação de página rodados e UNIDOS (ver processar_imagem):
+#   - psm 6  = "bloco uniforme": leitura limpa, mas a análise de layout às vezes
+#              DESCARTA linhas inteiras (no print de 4 linhas, só retornava 1).
+#   - psm 11 = "texto esparso": acha TODAS as linhas (não descarta), porém com
+#              agrupamento de linha ruim — por isso agrupamos por geometria (Y),
+#              não pelo line_num do Tesseract.
+# Unir os dois dá recall do 11 + leitura limpa do 6. Nenhum PSM sozinho é confiável.
+_PSMS = (6, 11)
 _CONF_MIN = 20      # descarta palavras (não-valor) com confiança abaixo disso
 _CONF_RELER = 70    # abaixo disso, re-lê a célula do valor ampliada
 _ESCALA_VALOR = 4   # fator de ampliação ao re-ler uma célula de valor
@@ -92,31 +98,24 @@ def _reler_categoria(imagem, palavras_esq, val_h):
         return None
 
 
-def processar_imagem(imagem):
+def _extrair_tokens(imagem, psm):
     """
-    Agrupa as palavras do Tesseract pelas linhas que ele próprio detectou
-    (block_num + par_num + line_num), depois divide cada linha em
-    esquerda (categoria) e direita (valor) pelo X de corte.
-
-    Isso evita que palavras de linhas diferentes se misturem, o que
-    acontecia quando a banda vertical era calculada manualmente.
-
-    O texto da categoria usa a imagem original (acentos leem melhor sem
-    pré-processamento); valores lidos com confiança baixa são re-lidos da
-    célula ampliada (dígitos pequenos como "10,00" eram lidos como "19,00").
+    Roda image_to_data num modo PSM (idioma por, com fallback sem idioma) e
+    devolve os tokens já filtrados por confiança. Não guarda o agrupamento de
+    linha do Tesseract — a linha é reconstruída depois por geometria (Y).
     """
     try:
         dados = pytesseract.image_to_data(
-            imagem, config=f"{_CONFIG} -l por",
+            imagem, config=f"--psm {psm} -l por",
             output_type=pytesseract.Output.DICT
         )
     except pytesseract.TesseractError:
         dados = pytesseract.image_to_data(
-            imagem, config=_CONFIG,
+            imagem, config=f"--psm {psm}",
             output_type=pytesseract.Output.DICT
         )
 
-    palavras = []
+    tokens = []
     for i in range(len(dados["text"])):
         texto = dados["text"][i].strip()
         conf = int(dados["conf"][i])
@@ -129,18 +128,83 @@ def processar_imagem(imagem):
         # descartados aqui, levam a linha inteira junto.
         if conf < _CONF_MIN and not _RE_VALOR.fullmatch(texto) and not _eh_celula_valor(texto):
             continue
-        cy = dados["top"][i] + dados["height"][i] // 2
-        palavras.append({
+        tokens.append({
             "texto": texto,
             "x":     dados["left"][i],
-            "cy":    cy,
+            "cy":    dados["top"][i] + dados["height"][i] // 2,
             "conf":  conf,
             "bbox":  (dados["left"][i], dados["top"][i], dados["width"][i], dados["height"][i]),
-            "grupo": (dados["block_num"][i], dados["par_num"][i], dados["line_num"][i]),
         })
+    return tokens
 
+
+def _dedup_tokens(tokens, medh):
+    """
+    Remove quase-duplicatas — a mesma palavra detectada por mais de um passe
+    PSM. Mantém a leitura de MAIOR confiança quando dois tokens caem na mesma
+    posição (X e Y próximos). Sem isso, a categoria viria com texto repetido.
+    """
+    tokens = sorted(tokens, key=lambda t: -t["conf"])
+    unicos = []
+    for t in tokens:
+        if any(abs(t["cy"] - u["cy"]) <= medh * 0.6 and abs(t["x"] - u["x"]) <= medh * 0.8
+               for u in unicos):
+            continue
+        unicos.append(t)
+    return unicos
+
+
+def _agrupar_por_y(tokens, medh):
+    """
+    Agrupa tokens em linhas visuais pela coordenada Y — NÃO pelo line_num do
+    Tesseract, que é instável no psm 11. Abre uma nova linha quando o salto de Y
+    entre tokens consecutivos passa de ~0.7 da altura mediana das letras. Como a
+    associação categoria↔valor é por banda, a categoria que quebra em 2 linhas
+    vira 2 linhas visuais e ambas são atribuídas ao mesmo valor.
+    """
+    toks = sorted(tokens, key=lambda t: t["cy"])
+    if not toks:
+        return []
+    thr = medh * 0.7
+    grupos = [[toks[0]]]
+    for t in toks[1:]:
+        if t["cy"] - grupos[-1][-1]["cy"] <= thr:
+            grupos[-1].append(t)
+        else:
+            grupos.append([t])
+    linhas = []
+    for ws in grupos:
+        ws = sorted(ws, key=lambda w: w["x"])
+        cy = sum(w["cy"] for w in ws) / len(ws)
+        linhas.append({"cy": cy, "tokens": ws})
+    linhas.sort(key=lambda l: l["cy"])
+    return linhas
+
+
+def processar_imagem(imagem):
+    """
+    Extrai pares (categoria, valor) da tabela por GEOMETRIA, sem confiar na
+    análise de layout do Tesseract (instável — às vezes descarta linhas):
+
+    1. Roda dois passes PSM (6 e 11) e UNE os tokens — recall do esparso (11) +
+       leitura limpa do bloco (6). Ver _PSMS.
+    2. Remove duplicatas entre passes (_dedup_tokens).
+    3. Determina o X de corte entre as colunas (meio do vão categoria↔valor).
+    4. Agrupa cada coluna em linhas visuais por Y (_agrupar_por_y).
+    5. Associa categoria↔valor por proximidade vertical (banda), cobrindo a
+       categoria que quebra em 2 linhas (comum no zoom 110%).
+
+    Valores garbled / de confiança baixa são re-lidos da célula ampliada.
+    """
+    palavras = []
+    for psm in _PSMS:
+        palavras += _extrair_tokens(imagem, psm)
     if not palavras:
         return []
+
+    # Altura mediana das letras — escala de referência p/ agrupar e deduplicar.
+    medh = max(1, sorted(w["bbox"][3] for w in palavras)[len(palavras) // 2])
+    palavras = _dedup_tokens(palavras, medh)
 
     # X de corte entre as colunas. Os valores são alinhados à direita, então o
     # X ESQUERDO deles varia com a largura (ex: "1.076,50" começa mais à esquerda
@@ -167,21 +231,8 @@ def processar_imagem(imagem):
     if not dir_tokens:
         return []
 
-    # Agrupa cada coluna em linhas (pela linha detectada pelo Tesseract)
-    def _agrupar_linhas(tokens):
-        grupos: dict = defaultdict(list)
-        for w in tokens:
-            grupos[w["grupo"]].append(w)
-        linhas = []
-        for _, ws in grupos.items():
-            ws = sorted(ws, key=lambda w: w["x"])
-            cy = sum(w["cy"] for w in ws) / len(ws)
-            linhas.append({"cy": cy, "tokens": ws})
-        linhas.sort(key=lambda l: l["cy"])
-        return linhas
-
-    val_linhas = _agrupar_linhas(dir_tokens)
-    cat_linhas = _agrupar_linhas(esq_tokens)
+    val_linhas = _agrupar_por_y(dir_tokens, medh)
+    cat_linhas = _agrupar_por_y(esq_tokens, medh)
 
     # Banda vertical de associação categoria↔valor: metade do espaçamento
     # mediano entre as linhas de valor. Ancorar no valor (e não exigir mesmo

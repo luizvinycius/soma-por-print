@@ -26,6 +26,8 @@ A tabela tem duas colunas relevantes:
 - **Coluna esquerda**: nome da forma de pagamento (ex: "TEF Crédito (Cartão Crédito)")
 - **Coluna direita**: valor em reais com vírgula decimal (ex: "95,00")
 
+> **Padrão de captura**: o site da origem é lido com o navegador em **zoom 110%** (fonte maior = OCR mais preciso). Efeito colateral: o nome da forma de pagamento frequentemente **quebra em 2 linhas** (ex: `Cartão de Crédito (Cartão Crédito)`), com o valor numa linha só. O OCR lida com isso associando categoria↔valor por banda vertical (ver Estratégia de OCR).
+
 Exemplo real de uma captura:
 
 ```
@@ -123,13 +125,25 @@ https://github.com/UB-Mannheim/tesseract/wiki
 
 ## Estratégia de OCR (`ocr.py`)
 
-O OCR usa `pytesseract.image_to_data` para obter a posição (bounding box) de cada palavra, e associa categoria ↔ valor pela geometria — **não** por divisão manual da imagem:
+O OCR usa `pytesseract.image_to_data` para obter a posição (bounding box) de cada palavra, e associa categoria ↔ valor pela **geometria** — **não** por divisão manual da imagem, nem confiando na análise de layout do Tesseract:
 
-1. Roda `image_to_data` com `--psm 6` (idioma `por`, com fallback sem idioma)
+1. Roda `image_to_data` em **dois modos PSM e une os tokens** (`_PSMS = (6, 11)`, idioma `por` com fallback sem idioma). `--psm 6` lê limpo mas às vezes **descarta linhas inteiras**; `--psm 11` (texto esparso) acha todas as linhas mas com agrupamento ruim. A união dá recall do 11 + leitura limpa do 6.
 2. Descarta palavras com confiança abaixo de `_CONF_MIN` (20), **exceto** tokens com formato monetário ou que pareçam uma célula de valor lida com erro (`_eh_celula_valor`: ≥ 2 dígitos) — valores garbled como `218oo`/`62(00` saem com conf baixíssima e, se descartados aqui, levam a linha inteira junto (some categoria + valor)
-3. Agrupa palavras pelas **linhas detectadas pelo próprio Tesseract** (`block_num + par_num + line_num`) — evita misturar texto de linhas diferentes
+3. Remove duplicatas entre os passes (`_dedup_tokens`, mesma palavra em X/Y próximos → mantém a de maior confiança)
 4. Determina o **X de corte** (`split_x`) cortando no meio do vão entre a borda direita da categoria e a borda esquerda da coluna de valores. A âncora são os tokens com formato monetário; se nenhum saiu limpo, cai para as células com cara de valor na metade direita (evita o "tudo zerado")
-5. Para cada linha de valor: junta a categoria das linhas próximas (banda vertical) → categoria; primeiro número → valor (re-lido da célula ampliada quando garbled / conf baixa)
+5. Agrupa cada coluna em **linhas visuais pela coordenada Y** (`_agrupar_por_y`) — **não** pelo `line_num` do Tesseract (instável no psm 11)
+6. Para cada linha de valor: junta a categoria das linhas próximas (banda vertical) → categoria; primeiro número → valor (re-lido da célula ampliada quando garbled / conf baixa)
+
+### Princípios de OCR validados (não regredir)
+
+Aprendidos empiricamente testando contra a suíte de prints reais — **medir antes de mudar**, nunca assumir:
+
+- **Nenhum PSM sozinho é confiável** para essas tabelas. A análise de layout do `--psm 6` descarta linhas de forma imprevisível (era a causa de "só crédito"/"tudo zerado"/"nenhuma categoria"). Por isso unimos 6 + 11 e reconstruímos a linha por geometria.
+- **A âncora confiável é a POSIÇÃO do valor, não o texto.** Toda associação é por X (coluna) e Y (linha), porque o texto sai garbled mas a caixa fica no lugar.
+- **Não ampliar a imagem inteira antes do OCR.** Foi testado e **piora**: o segmentador do Tesseract é calibrado para a resolução nativa; ampliar quebra o agrupamento de linha. A ampliação 4× é cirúrgica, só na **célula** re-lida (`_reler_valor`/`_reler_categoria`).
+- **Não inverter cores.** O Tesseract 5 (LSTM) lê texto claro sobre fundo escuro tão bem quanto o contrário — inverter não muda nada aqui (testado).
+- **Resolução real vem da fonte, não de pós-processamento.** A captura já pega pixels físicos (DPI-aware). O ganho real de nitidez vem de **dar zoom na origem** (navegador a **110%**, o padrão atual) — texto vetorial re-renderizado com mais pixels reais. Ampliar bitmap depois só inventa pixels borrados.
+- **Categoria pode quebrar em 2 linhas** (efeito colateral do zoom 110%, ex: `Cartão de Crédito (Cartão Crédito)`). Já é coberto pela associação por banda vertical ancorada no valor.
 
 ### Parsing de valores (`parsear_valor` / `_RE_VALOR`)
 
