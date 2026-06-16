@@ -15,8 +15,9 @@ def normalizar_categoria(texto):
     if "total" in t:
         return None
 
-    # "PIX TEF" deve ser ignorado (verificar ANTES do pix genérico)
-    if re.search(r"pix\s*tef", t):
+    # "PIX TEF" e "TEF PIX" (pix + tef em qualquer ordem) devem ser ignorados
+    # — verificar ANTES do pix genérico
+    if "pix" in t and "tef" in t:
         return None
 
     # Crédito

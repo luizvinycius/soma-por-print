@@ -49,14 +49,14 @@ Os nomes das formas de pagamento são normalizados para categorias simples:
 |--------------------------------------|-------------|
 | TEF Crédito, Cartão Crédito, Crédito | `credito`   |
 | TEF Débito, Cartão Débito, Débito    | `debito`    |
-| PIX (Voucher), TEF PIX (Pix)         | `pix`       |
-| PIX TEF (Pix)                        | `IGNORAR`   |
+| PIX (Voucher)                        | `pix`       |
+| PIX TEF (Pix), TEF PIX (Pix)         | `IGNORAR`   |
 | Totais (R$)                          | `IGNORAR`   |
 | Qualquer forma não mapeada           | `IGNORAR`   |
 
 ### Regras de exclusão (IMPORTANTE)
 
-- **"PIX TEF (Pix)"** → completamente ignorado (regex `pix\s*tef`, verificado **antes** do pix genérico). Atenção à ordem: "TEF PIX (Pix)" **conta** como `pix`; só "PIX TEF" é ignorado.
+- **"PIX TEF" e "TEF PIX"** → qualquer linha que contenha **pix + tef** (em qualquer ordem) é completamente ignorada. Verificado **antes** do pix genérico, então só "PIX (Voucher)" e variações sem "tef" contam como `pix`.
 - **"Totais (R$)"** ou qualquer linha com "total" → completamente ignorado
 - Formas de pagamento fora de crédito/débito/pix (ex: "Caderneta", "Delivery") → **ignoradas de propósito**. Por isso o "Total" do app pode não bater com o "Totais (R$)" da nota.
 - Qualquer linha sem valor numérico identificável → ignorada silenciosamente
