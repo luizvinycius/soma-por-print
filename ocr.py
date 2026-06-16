@@ -56,8 +56,10 @@ def _reler_valor(imagem, left, top, w, h):
            min(imagem.width, left + w + pad), min(imagem.height, top + h + pad))
     cell = imagem.crop(box)
     cell = ImageOps.grayscale(cell)
-    cell = ImageOps.autocontrast(cell)
+    # Amplia ANTES de aplicar autocontraste: autocontrastar a célula minúscula
+    # antes de ampliar distorcia os dígitos (ex: "684,00" virava "664,00", 8→6).
     cell = cell.resize((cell.width * _ESCALA_VALOR, cell.height * _ESCALA_VALOR), Image.LANCZOS)
+    cell = ImageOps.autocontrast(cell)
     try:
         txt = pytesseract.image_to_string(
             cell, config="--psm 7 -c tessedit_char_whitelist=0123456789.,"
@@ -90,8 +92,9 @@ def _reler_categoria(imagem, palavras_esq, val_h):
            min(imagem.width, right + pad), min(imagem.height, top + h + pad))
     cell = imagem.crop(box)
     cell = ImageOps.grayscale(cell)
-    cell = ImageOps.autocontrast(cell)
+    # Amplia antes de autocontrastar (ver _reler_valor) — mesma razão.
     cell = cell.resize((cell.width * _ESCALA_VALOR, cell.height * _ESCALA_VALOR), Image.LANCZOS)
+    cell = ImageOps.autocontrast(cell)
     try:
         return pytesseract.image_to_string(cell, config="--psm 7 -l por").strip()
     except pytesseract.TesseractError:
@@ -141,10 +144,16 @@ def _extrair_tokens(imagem, psm):
 def _dedup_tokens(tokens, medh):
     """
     Remove quase-duplicatas — a mesma palavra detectada por mais de um passe
-    PSM. Mantém a leitura de MAIOR confiança quando dois tokens caem na mesma
-    posição (X e Y próximos). Sem isso, a categoria viria com texto repetido.
+    PSM. Entre dois tokens na mesma posição (X e Y próximos), prefere o que tem
+    formato monetário LIMPO (fullmatch) e só então a maior confiança. Confiança
+    não é confiabilidade: "684,00" (conf 65) e "6B4,00" (conf 67) caíam juntos e
+    a conf maior fazia vencer o garbled. Sem dedup, a categoria viria repetida.
     """
-    tokens = sorted(tokens, key=lambda t: -t["conf"])
+    tokens = sorted(
+        tokens,
+        key=lambda t: (1 if _RE_VALOR.fullmatch(t["texto"]) else 0, t["conf"]),
+        reverse=True,
+    )
     unicos = []
     for t in tokens:
         if any(abs(t["cy"] - u["cy"]) <= medh * 0.6 and abs(t["x"] - u["x"]) <= medh * 0.8
@@ -257,11 +266,16 @@ def processar_imagem(imagem):
             continue
         cat_tokens.sort(key=lambda w: (w["cy"], w["x"]))
 
-        # Token do valor: de preferência um que já parseie; senão um com dígito;
-        # senão o primeiro da coluna (pode ter saído totalmente garbled, ex:
-        # "20,00" lido como "=" — sem dígito, mas a célula ainda é re-legível).
+        # Token do valor, em ordem de preferência: formato monetário LIMPO
+        # (fullmatch); senão um que ao menos parseie em parte; senão um com
+        # dígito; senão o primeiro da coluna (pode ter saído totalmente garbled,
+        # ex: "20,00" lido como "=" — sem dígito, mas a célula é re-legível).
+        # Preferir o fullmatch evita pegar um garbled cujo parse parcial mente
+        # (ex: "6B4,00" → search acha "4,00").
         tokens = vl["tokens"]
-        w_val = next((w for w in tokens if parsear_valor(w["texto"]) is not None), None)
+        w_val = next((w for w in tokens if _RE_VALOR.fullmatch(w["texto"])), None)
+        if w_val is None:
+            w_val = next((w for w in tokens if parsear_valor(w["texto"]) is not None), None)
         if w_val is None:
             w_val = next((w for w in tokens if any(c.isdigit() for c in w["texto"])), None)
         if w_val is None:

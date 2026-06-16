@@ -35,6 +35,16 @@ ESPERADO = {
     "6.png": (222.0, 226.0, 0.0),
     "7.png": (326.99, 118.0, 0.0),    # centavos quebrados (326,99)
     "8.png": (411.0, 243.0, 46.0),    # crédito em 2 linhas + PIX Voucher
+    "9.png": (201.0, 335.0, 0.0),     # débito em 2 linhas
+    "10.png": (58.0, 283.0, 0.0),
+    "11.png": (328.0, 444.0, 28.0),
+    "12.png": (106.0, 356.0, 0.0),
+    "13.png": (77.0, 337.0, 45.0),    # débito 0,00 em 2 linhas + PIX Voucher
+    "14.png": (695.0, 705.0, 0.0),    # crédito 0,00 em 2 linhas; PIX TEF 1.168 (milhar) ignorado
+    "15.png": (684.0, 570.0, 0.0),    # 684,00 era lido como 664,00 (autocontraste antes de ampliar)
+    "16.png": (94.0, 242.0, 10.0),    # débito em 2 linhas + PIX Voucher
+    "17.png": (125.0, 223.0, 0.0),    # crédito 0,00 em 2 linhas
+    "18.png": (170.0, 348.96, 0.0),   # tabela longa; várias linhas zeradas no fim
 }
 
 
