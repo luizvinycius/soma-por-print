@@ -3,6 +3,8 @@ from collections import defaultdict
 import pytesseract
 from PIL import Image, ImageOps
 
+from categorias import normalizar_categoria, deve_ignorar
+
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 _CONFIG = "--psm 6"
@@ -46,6 +48,37 @@ def _reler_valor(imagem, left, top, w, h):
     except pytesseract.TesseractError:
         return None
     return parsear_valor(txt)
+
+
+def _reler_categoria(imagem, palavras_esq, val_h):
+    """
+    Re-lê a célula da categoria (lado esquerdo), recortada e ampliada. Usado
+    quando o texto da categoria saiu garbled na leitura da imagem inteira
+    (ex: "Crédito" virou lixo) e a linha não foi reconhecida.
+
+    A altura do recorte é limitada (min das alturas das palavras e a do valor):
+    um token garbled costuma ter bounding box com altura inflada, que sujava
+    o recorte com texto das linhas vizinhas. Retorna o texto re-lido ou None.
+    """
+    if not palavras_esq:
+        return None
+    lefts   = [w["bbox"][0] for w in palavras_esq]
+    tops    = [w["bbox"][1] for w in palavras_esq]
+    rights  = [w["bbox"][0] + w["bbox"][2] for w in palavras_esq]
+    heights = [w["bbox"][3] for w in palavras_esq]
+    left, top, right = min(lefts), min(tops), max(rights)
+    h = min(heights + [val_h])
+    pad = 4
+    box = (max(0, left - pad), max(0, top - pad),
+           min(imagem.width, right + pad), min(imagem.height, top + h + pad))
+    cell = imagem.crop(box)
+    cell = ImageOps.grayscale(cell)
+    cell = ImageOps.autocontrast(cell)
+    cell = cell.resize((cell.width * _ESCALA_VALOR, cell.height * _ESCALA_VALOR), Image.LANCZOS)
+    try:
+        return pytesseract.image_to_string(cell, config="--psm 7 -l por").strip()
+    except pytesseract.TesseractError:
+        return None
 
 
 def processar_imagem(imagem):
@@ -127,20 +160,38 @@ def processar_imagem(imagem):
         esq  = [w for w in linha["palavras"] if w["x"] <  split_x]
         dir_ = [w for w in linha["palavras"] if w["x"] >= split_x]
 
-        # primeiro token da direita que tem formato de valor
+        if not esq:
+            continue
+
+        # Token do valor na direita: de preferência um que já parseie como valor;
+        # senão, qualquer token com dígitos (valor pode ter saído garbled, ex:
+        # "1.168,99" lido como "156965" — sem vírgula, não parseia).
         w_val = next((w for w in dir_ if parsear_valor(w["texto"]) is not None), None)
-        if w_val is None or not esq:
+        if w_val is None:
+            w_val = next((w for w in dir_ if any(c.isdigit() for c in w["texto"])), None)
+        if w_val is None:
             continue
 
         valor = parsear_valor(w_val["texto"])
-        # Confiança baixa → re-lê a célula ampliada (mais preciso para dígitos
-        # pequenos). Confiança alta é mantida, evitando trocar leitura boa por ruim.
-        if w_val["conf"] < _CONF_RELER:
+        # Re-lê a célula ampliada quando o valor não parseou (garbled) ou veio
+        # com confiança baixa. Leitura boa de confiança alta é mantida.
+        if valor is None or w_val["conf"] < _CONF_RELER:
             relido = _reler_valor(imagem, *w_val["bbox"])
             if relido is not None:
                 valor = relido
 
+        if valor is None:
+            continue
+
         cat_texto = " ".join(w["texto"] for w in esq)
+        # Categoria não reconhecida e não é linha a ignorar de propósito →
+        # texto pode ter saído garbled; re-lê a célula ampliada e só adota a
+        # nova leitura se ela passar a classificar (nunca piora um acerto).
+        if normalizar_categoria(cat_texto) is None and not deve_ignorar(cat_texto):
+            relido = _reler_categoria(imagem, esq, w_val["bbox"][3])
+            if relido and normalizar_categoria(relido) is not None:
+                cat_texto = relido
+
         resultados.append((cat_texto, valor))
 
     return resultados

@@ -1,6 +1,21 @@
 import re
 
 
+def deve_ignorar(texto):
+    """
+    True se o texto casa uma regra de exclusão EXPLÍCITA (linha de total, ou
+    pix + tef em qualquer ordem). Usado para distinguir uma linha que deve ser
+    ignorada de propósito de uma que apenas não foi reconhecida (ex: texto
+    garbled pelo OCR) — só esta última vale a pena re-ler.
+    """
+    t = texto.strip().lower()
+    if "total" in t:
+        return True
+    if "pix" in t and "tef" in t:
+        return True
+    return False
+
+
 def normalizar_categoria(texto):
     """
     Normaliza o nome de uma forma de pagamento para uma categoria simples.
@@ -11,13 +26,8 @@ def normalizar_categoria(texto):
     if not t:
         return None
 
-    # Ignora linhas com "total"
-    if "total" in t:
-        return None
-
-    # "PIX TEF" e "TEF PIX" (pix + tef em qualquer ordem) devem ser ignorados
-    # — verificar ANTES do pix genérico
-    if "pix" in t and "tef" in t:
+    # Regras de exclusão explícitas (total, PIX TEF / TEF PIX) — antes do pix genérico
+    if deve_ignorar(t):
         return None
 
     # Crédito
