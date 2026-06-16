@@ -1,0 +1,12 @@
+# Cache do Python
+__pycache__/
+*.py[cod]
+
+# Arquivos gerados em runtime
+totais.json
+debug.log
+stdout.log
+stderr.log
+
+# Configuração local do Claude Code (ambiente do dev)
+.claude/
