@@ -47,7 +47,12 @@ def processar_imagem(imagem):
     for i in range(len(dados["text"])):
         texto = dados["text"][i].strip()
         conf = int(dados["conf"][i])
-        if not texto or conf < _CONF_MIN:
+        if not texto or conf < 0:
+            continue
+        # Filtra ruído de baixa confiança, MAS nunca descarta um token com
+        # formato de valor monetário — valores reais às vezes saem com conf
+        # baixa (ex: "450,00" com conf 18) e não podem ser perdidos.
+        if conf < _CONF_MIN and not _RE_VALOR.fullmatch(texto):
             continue
         cy = dados["top"][i] + dados["height"][i] // 2
         palavras.append({
