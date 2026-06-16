@@ -129,48 +129,66 @@ def processar_imagem(imagem):
     if not palavras:
         return []
 
-    # Agrupa por linha detectada pelo Tesseract
-    grupos: dict = defaultdict(list)
-    for p in palavras:
-        grupos[p["grupo"]].append(p)
-
-    # Monta lista de linhas ordenadas de cima para baixo
-    linhas = []
-    for _, words in sorted(grupos.items()):
-        words = sorted(words, key=lambda w: w["x"])
-        cy_medio = sum(w["cy"] for w in words) / len(words)
-        linhas.append({"cy": cy_medio, "palavras": words})
-    linhas.sort(key=lambda l: l["cy"])
-
     # X de corte: mediana dos X dos tokens com formato monetário
-    x_monetarios = sorted(
-        w["x"]
-        for linha in linhas
-        for w in linha["palavras"]
-        if _RE_VALOR.fullmatch(w["texto"])
-    )
+    x_monetarios = sorted(w["x"] for w in palavras if _RE_VALOR.fullmatch(w["texto"]))
     if not x_monetarios:
         return []
-
     split_x = x_monetarios[len(x_monetarios) // 2] - 10
 
-    # Para cada linha: texto à esquerda do corte → categoria; valor à direita → número
+    # Separa as duas colunas pelo X de corte
+    esq_tokens = [w for w in palavras if w["x"] <  split_x]
+    dir_tokens = [w for w in palavras if w["x"] >= split_x]
+    if not dir_tokens:
+        return []
+
+    # Agrupa cada coluna em linhas (pela linha detectada pelo Tesseract)
+    def _agrupar_linhas(tokens):
+        grupos: dict = defaultdict(list)
+        for w in tokens:
+            grupos[w["grupo"]].append(w)
+        linhas = []
+        for _, ws in grupos.items():
+            ws = sorted(ws, key=lambda w: w["x"])
+            cy = sum(w["cy"] for w in ws) / len(ws)
+            linhas.append({"cy": cy, "tokens": ws})
+        linhas.sort(key=lambda l: l["cy"])
+        return linhas
+
+    val_linhas = _agrupar_linhas(dir_tokens)
+    cat_linhas = _agrupar_linhas(esq_tokens)
+
+    # Banda vertical de associação categoria↔valor: metade do espaçamento
+    # mediano entre as linhas de valor. Ancorar no valor (e não exigir mesmo
+    # grupo de linha) resolve o caso da categoria que quebra em 2 linhas
+    # visuais e empurra o valor para um grupo de linha separado — aí o valor
+    # ficava órfão e a linha era descartada.
+    cys = [l["cy"] for l in val_linhas]
+    if len(cys) >= 2:
+        gaps = sorted(cys[i + 1] - cys[i] for i in range(len(cys) - 1))
+        banda = gaps[len(gaps) // 2] / 2
+    else:
+        banda = max((w["bbox"][3] for w in dir_tokens), default=20) * 1.5
+
+    # Para cada linha de valor, junta a categoria das linhas próximas (dentro da banda)
     resultados = []
-    for linha in linhas:
-        esq  = [w for w in linha["palavras"] if w["x"] <  split_x]
-        dir_ = [w for w in linha["palavras"] if w["x"] >= split_x]
-
-        if not esq:
+    for vl in val_linhas:
+        cat_tokens = []
+        for cl in cat_linhas:
+            if abs(cl["cy"] - vl["cy"]) <= banda:
+                cat_tokens.extend(cl["tokens"])
+        if not cat_tokens:
             continue
+        cat_tokens.sort(key=lambda w: (w["cy"], w["x"]))
 
-        # Token do valor na direita: de preferência um que já parseie como valor;
-        # senão, qualquer token com dígitos (valor pode ter saído garbled, ex:
-        # "1.168,99" lido como "156965" — sem vírgula, não parseia).
-        w_val = next((w for w in dir_ if parsear_valor(w["texto"]) is not None), None)
+        # Token do valor: de preferência um que já parseie; senão um com dígito;
+        # senão o primeiro da coluna (pode ter saído totalmente garbled, ex:
+        # "20,00" lido como "=" — sem dígito, mas a célula ainda é re-legível).
+        tokens = vl["tokens"]
+        w_val = next((w for w in tokens if parsear_valor(w["texto"]) is not None), None)
         if w_val is None:
-            w_val = next((w for w in dir_ if any(c.isdigit() for c in w["texto"])), None)
+            w_val = next((w for w in tokens if any(c.isdigit() for c in w["texto"])), None)
         if w_val is None:
-            continue
+            w_val = tokens[0]
 
         valor = parsear_valor(w_val["texto"])
         # Re-lê a célula ampliada quando o valor não parseou (garbled) ou veio
@@ -183,12 +201,12 @@ def processar_imagem(imagem):
         if valor is None:
             continue
 
-        cat_texto = " ".join(w["texto"] for w in esq)
+        cat_texto = " ".join(w["texto"] for w in cat_tokens)
         # Categoria não reconhecida e não é linha a ignorar de propósito →
         # texto pode ter saído garbled; re-lê a célula ampliada e só adota a
         # nova leitura se ela passar a classificar (nunca piora um acerto).
         if normalizar_categoria(cat_texto) is None and not deve_ignorar(cat_texto):
-            relido = _reler_categoria(imagem, esq, w_val["bbox"][3])
+            relido = _reler_categoria(imagem, cat_tokens, w_val["bbox"][3])
             if relido and normalizar_categoria(relido) is not None:
                 cat_texto = relido
 
