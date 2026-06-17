@@ -45,6 +45,7 @@ ESPERADO = {
     "16.png": (94.0, 242.0, 10.0),    # débito em 2 linhas + PIX Voucher
     "17.png": (125.0, 223.0, 0.0),    # crédito 0,00 em 2 linhas
     "18.png": (170.0, 348.96, 0.0),   # tabela longa; várias linhas zeradas no fim
+    "19.png": (341.0, 367.0, 222.0),  # "Vale Alimentação (Voucher)" virava pix (era casado por "voucher")
 }
 
 

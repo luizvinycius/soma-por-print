@@ -38,8 +38,10 @@ def normalizar_categoria(texto):
     if re.search(r"d[eé]b", t):
         return "debito"
 
-    # PIX (qualquer variação que não seja PIX TEF — já excluído acima)
-    if "pix" in t or "voucher" in t:
+    # PIX (qualquer variação que não seja PIX TEF — já excluído acima).
+    # NÃO casar por "voucher": "PIX (Voucher)" já casa por "pix", enquanto
+    # "Vale Alimentação (Voucher)" deve ser ignorado (não é forma mapeada).
+    if "pix" in t:
         return "pix"
 
     return None
