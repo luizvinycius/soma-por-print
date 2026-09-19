@@ -171,8 +171,13 @@ Após cada captura, mostra um popup:
   [Zerar Totais]   [Fechar]
 ```
 
+- Cada linha de categoria (e a linha de Total) tem um botão **📋** que copia o valor numérico daquela linha para o clipboard, em formato numérico puro (vírgula decimal, sem `R$`, sem separador de milhar — ex: `1234,56`), pronto para colar direto na calculadora. Ao clicar, o botão pisca `✓` por 800ms como feedback.
+- A cópia usa o clipboard do próprio tkinter, aplicado no **`root`** (não no `top` do popup): o `root` vive enquanto o app está na bandeja, então o valor sobrevive ao fechamento do popup. **Não usar `subprocess` + `clip.exe`**: foi medido em ~310ms sob `pythonw` (sem console, o Windows aloca um só para isso) e chegava a ~6s com antivírus escaneando o processo novo, travando a UI. O clipboard do tkinter custa ~2ms.
+  > Limitação conhecida e aceita: o Tk perde o conteúdo do clipboard quando o **processo encerra** (testado). Como o app é residente na bandeja e o fluxo é copiar → colar na calculadora com ele rodando, isso não afeta o uso real.
 - **Zerar Totais** reseta o `totais.json` (via `callback_zerar`) e fecha o popup
 - **Fechar** apenas fecha o popup
+- **Não fixar largura/altura do popup.** A geometria é calculada no fim da função, depois de todos os widgets montados, via `update_idletasks()` + `winfo_reqwidth/reqheight()`. Com o DPI awareness declarado no `main.py` o `tk scaling` passa de 1.6, e o tamanho fixo que existia antes (350x240) cortava a barra **Zerar Totais / Fechar** para fora da janela — o conteúdo real precisava de 560x296. Dimensionar pelo conteúdo também acomoda um número variável de categorias.
+  > Ao testar o popup isoladamente, **declare o DPI awareness igual ao `main.py`** antes de criar qualquer janela — sem isso o `tk scaling` fica em 1.0 e o corte não reproduz.
 
 ---
 
